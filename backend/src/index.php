@@ -22,6 +22,39 @@ function getRedis() {
     return $redis;
 }
 
+// Función auxiliar para enviar correos a Mailpit por Socket
+function enviarCorreo($asunto, $mensaje) {
+    $smtp_host = getenv('SMTP_HOST');
+    $smtp_port = getenv('SMTP_PORT');
+    if (!$smtp_host || !$smtp_port) return;
+
+    $socket = @fsockopen($smtp_host, $smtp_port, $errno, $errstr, 5);
+    if ($socket) {
+        $crlf = "\r\n";
+        $headers = "From: admin@sistema.local" . $crlf .
+                   "To: admin@sistema.local" . $crlf .
+                   "Subject: " . $asunto . $crlf .
+                   "Content-Type: text/plain; charset=UTF-8" . $crlf .
+                   $crlf;
+
+        $body = $mensaje . $crlf;
+
+        fread($socket, 1024);
+        fwrite($socket, "HELO localhost" . $crlf);
+        fread($socket, 1024);
+        fwrite($socket, "MAIL FROM: <admin@sistema.local>" . $crlf);
+        fread($socket, 1024);
+        fwrite($socket, "RCPT TO: <admin@sistema.local>" . $crlf);
+        fread($socket, 1024);
+        fwrite($socket, "DATA" . $crlf);
+        fread($socket, 1024);
+        fwrite($socket, $headers . $body . "." . $crlf);
+        fread($socket, 1024);
+        fwrite($socket, "QUIT" . $crlf);
+        fclose($socket);
+    }
+}
+
 // 1. Endpoint /health
 if ($route === '/health') {
     $status = ["mariadb" => "desconectado", "redis" => "desconectado"];
@@ -55,70 +88,50 @@ if (preg_match('/^\/incidencias(\/([0-9]+))?$/', $route, $matches)) {
         exit;
     }
 
-// POST: Crear
+    // POST: Crear (Primer tipo de correo)
     if ($method === 'POST') {
         $data = json_decode(file_get_contents("php://input"));
         $stmt = $pdo->prepare("INSERT INTO incidencias (titulo, descripcion, estado) VALUES (?, ?, ?)");
         $stmt->execute([$data->titulo, $data->descripcion, 'abierta']);
         
-        // Obtenemos el ID que MariaDB le acaba de asignar
         $id_insertado = $pdo->lastInsertId();
-        
-        $redis->del('incidencias_lista'); // Invalidar caché
+        $redis->del('incidencias_lista');
 
-        // Enviar correo a Mailpit usando conexión directa por Socket
-        $smtp_host = getenv('SMTP_HOST');
-        $smtp_port = getenv('SMTP_PORT');
-        
-        $socket = fsockopen($smtp_host, $smtp_port, $errno, $errstr, 10);
-        if ($socket) {
-            $crlf = "\r\n";
-            $headers = "From: admin@sistema.local" . $crlf .
-                       "To: admin@sistema.local" . $crlf .
-                       "Subject: Nueva Incidencia Creada (ID: $id_insertado)" . $crlf .
-                       "Content-Type: text/plain; charset=UTF-8" . $crlf .
-                       $crlf; 
-            
-            $body = "Se ha registrado una nueva incidencia." . $crlf .
-                    "ID: " . $id_insertado . $crlf .
-                    "Título: " . $data->titulo . $crlf . 
-                    "Descripción: " . $data->descripcion . $crlf;
-            
-            fread($socket, 1024); 
-            fwrite($socket, "HELO localhost" . $crlf);
-            fread($socket, 1024);
-            fwrite($socket, "MAIL FROM: <admin@sistema.local>" . $crlf);
-            fread($socket, 1024);
-            fwrite($socket, "RCPT TO: <admin@sistema.local>" . $crlf);
-            fread($socket, 1024);
-            fwrite($socket, "DATA" . $crlf);
-            fread($socket, 1024);
-            fwrite($socket, $headers . $body . "." . $crlf);
-            fread($socket, 1024);
-            fwrite($socket, "QUIT" . $crlf);
-            fclose($socket);
-        }
+        $mensaje_correo = "Se ha registrado una nueva incidencia.\r\n" .
+                         "ID: " . $id_insertado . "\r\n" .
+                         "Título: " . $data->titulo . "\r\n" .
+                         "Descripción: " . $data->descripcion;
+
+        enviarCorreo("Nueva Incidencia Creada (ID: $id_insertado)", $mensaje_correo);
 
         echo json_encode(["mensaje" => "Incidencia creada y correo enviado"]);
         exit;
     }
 
-    // PUT: Actualizar
+    // PUT: Actualizar estado (Segundo tipo de correo)
     if ($method === 'PUT' && $id) {
         $data = json_decode(file_get_contents("php://input"));
         $stmt = $pdo->prepare("UPDATE incidencias SET estado = ? WHERE id = ?");
         $stmt->execute([$data->estado, $id]);
         $redis->del('incidencias_lista');
-        echo json_encode(["mensaje" => "Estado actualizado"]);
+
+        $mensaje_correo = "El estado de la incidencia con ID $id ha sido cambiado a: " . strtoupper($data->estado);
+        enviarCorreo("Estado de Incidencia Actualizado (ID: $id)", $mensaje_correo);
+
+        echo json_encode(["mensaje" => "Estado actualizado y notificación enviada"]);
         exit;
     }
 
-    // DELETE: Eliminar
+    // DELETE: Eliminar (Tercer tipo de correo)
     if ($method === 'DELETE' && $id) {
         $stmt = $pdo->prepare("DELETE FROM incidencias WHERE id = ?");
         $stmt->execute([$id]);
         $redis->del('incidencias_lista');
-        echo json_encode(["mensaje" => "Incidencia eliminada"]);
+
+        $mensaje_correo = "Se ha eliminado del sistema la incidencia con ID: " . $id;
+        enviarCorreo("Incidencia Eliminada (ID: $id)", $mensaje_correo);
+
+        echo json_encode(["mensaje" => "Incidencia eliminada y notificación enviada"]);
         exit;
     }
 }
