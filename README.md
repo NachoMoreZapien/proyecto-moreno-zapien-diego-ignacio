@@ -14,7 +14,7 @@ Aplicación web distribuida en cinco contenedores mediante Docker Compose para e
 - Docker Compose v2.
 
 ## Instalación y ejecución
-1. Clonar el repositorio.
+1. Clonar el repositorio con git clone https://github.com/NachoMoreZapien/proyecto-moreno-zapien-diego-ignacio.git
 2. Copiar `.env.example` y renombrarlo a `.env`, llenando los valores.
 3. Ejecutar el comando para levantar la infraestructura:
    `docker compose up -d --build`
